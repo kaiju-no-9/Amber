@@ -1,0 +1,11 @@
+apiVersion : brain.dev/v1alpha1
+kind : Worldload
+metadata:
+    name : hello
+spec:
+    runtime : process 
+    command : ["go","version"]
+    workingDir :  . 
+    env: 
+    APP_ENV: "development"
+    
