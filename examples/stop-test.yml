@@ -1,0 +1,10 @@
+apiVersion: brain.dev/v1alpha1
+kind: Workload
+metadata:
+  name: stop-test
+spec:
+  runtime: process
+  command: ["sleep", "60"]
+  workingDir: .
+  env:
+    APP_ENV: "development"

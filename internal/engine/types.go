@@ -10,6 +10,7 @@ const (
 	StateRunning  State = "running"
 	StateExited   State = "Exited"
 	StateFailed   State = "Failed"
+	StateStopped  State = "Stopped"
 )
 
 type Spec struct {

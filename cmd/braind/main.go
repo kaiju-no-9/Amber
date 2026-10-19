@@ -1,6 +1,8 @@
 package main
 
 import (
+	"brain/internal/api"
+	"brain/internal/engine"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,11 +14,9 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
-
-	"brain/internal/api"
-	"brain/internal/engine"
 )
 
 func main() {
@@ -105,6 +105,41 @@ func run() error {
 			Name:   workload.Name,
 			Status: string(workload.State),
 		})
+	})
+
+	mux.HandleFunc("/v1/workloads/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		name := strings.TrimPrefix(r.URL.Path, "/v1/workloads/")
+		if name == "" || strings.Contains(name, "/") {
+			http.NotFound(w, r)
+			return
+		}
+		workload, found := mgr.Get(name)
+		if !found {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(api.WorkloadResponse{
+			ID:     workload.ID,
+			Name:   workload.Name,
+			Status: string(workload.State),
+		})
+	})
+	mux.HandleFunc("/v1/workloads/{name}/stop", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		if _, found := mgr.Get(name); !found {
+			http.NotFound(w, r)
+			return
+		}
+		if err := mgr.Stop(name); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
 	})
 
 	server := &http.Server{

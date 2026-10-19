@@ -41,6 +41,23 @@ func execute(args []string) error {
 		}
 		return nil
 	}
+	//  stoping parameter .
+	if len(args) == 2 && args[0] == "stop" {
+		if err := client.StopWorkload(context.Background(), "./brain.sock", args[1]); err != nil {
+			return err
+		}
+		fmt.Printf("stop requested for workload %q\n", args[1])
+		return nil
+	}
+	if len(args) == 2 && args[0] == "get" {
+		workload, err := client.GetWorkload(context.Background(), "./brain.sock", args[1])
+		if err != nil {
+			return err
+		}
+		fmt.Printf("ID: %s\nName: %s\nState: %s\n",
+			workload.ID, workload.Name, workload.Status)
+		return nil
+	}
 
 	if len(args) != 2 {
 		return fmt.Errorf("usage: brain <health|validate|run> [FILE]")
