@@ -129,6 +129,23 @@ func run() error {
 			Status: string(workload.State),
 		})
 	})
+	mux.HandleFunc("/v1/workloads/{name}/logs", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		if _, found := mgr.Get(name); !found {
+			http.NotFound(w, r)
+			return
+		}
+		stdout, stderr, err := mgr.Logs(name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(api.WorkloadLogsResponse{
+			Stdout: string(stdout),
+			Stderr: string(stderr),
+		})
+	})
 	mux.HandleFunc("/v1/workloads/{name}/stop", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
 		if _, found := mgr.Get(name); !found {

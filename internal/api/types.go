@@ -17,3 +17,8 @@ type WorkloadResponse struct {
 	Name   string `json:"name"`
 	Status string `json:"status"`
 }
+
+type WorkloadLogsResponse struct {
+	Stdout string `json:"stdout"`
+	Stderr string `json:"stderr"`
+}

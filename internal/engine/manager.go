@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
+	//"golang.org/x/tools/go/analysis/passes/stdmethods"
 )
 
 var ErrNameConflict = errors.New("a workload with this name already exists")
@@ -19,6 +21,8 @@ type managedWorkload struct {
 	spec          Spec
 	command       *exec.Cmd
 	stopRequested bool
+	stdoutPath    string
+	stderrPath    string
 }
 
 type Manager struct {
@@ -49,12 +53,33 @@ func (m *Manager) Start(spec Spec) (Workload, error) {
 	if _, err := rand.Read(idBytes); err != nil {
 		return Workload{}, fmt.Errorf("generate workload ID: %w", err)
 	}
+	//......................................
 	id := hex.EncodeToString(idBytes)
-
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return Workload{}, fmt.Errorf("find cache dir: %w", err)
+	}
+	logDir := filepath.Join(cacheDir, "brain", "logs", id)
+	if err := os.MkdirAll(logDir, 0700); err != nil {
+		return Workload{}, fmt.Errorf("create log dir: %w", err)
+	}
+	stdoutPath := filepath.Join(logDir, "stdout.log")
+	stdoutFile, err := os.OpenFile(stdoutPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		return Workload{}, fmt.Errorf("create stdout log: %w", err)
+	}
+	defer stdoutFile.Close()
+	stderrPath := filepath.Join(logDir, "stderr.log")
+	stderrFile, err := os.OpenFile(stderrPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		return Workload{}, fmt.Errorf("create stderr log: %w", err)
+	}
+	defer stderrFile.Close()
+	//...................................
 	cmd := exec.Command(spec.Command[0], spec.Command[1:]...)
 	cmd.Dir = spec.WorkingDir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = stdoutFile
+	cmd.Stderr = stderrFile
 	cmd.Stdin = os.Stdin
 	cmd.Env = os.Environ()
 	for key, value := range spec.Env {
@@ -80,9 +105,11 @@ func (m *Manager) Start(spec Spec) (Workload, error) {
 		StartedAt: &now,
 	}
 	entry := &managedWorkload{
-		workload: workload,
-		spec:     spec,
-		command:  cmd,
+		workload:   workload,
+		spec:       spec,
+		command:    cmd,
+		stdoutPath: stdoutPath,
+		stderrPath: stderrPath,
 	}
 	m.byID[id] = entry
 	m.byName[spec.Name] = id
@@ -186,4 +213,28 @@ func (m *Manager) Stop(name string) error {
 	entry.stopRequested = true
 	m.mu.Unlock()
 	return nil
+}
+
+func (m *Manager) Logs(name string) ([]byte, []byte, error) {
+	m.mu.Lock()
+
+	id, exists := m.byName[name]
+	if !exists {
+		m.mu.Unlock()
+		return nil, nil, fmt.Errorf("workload %q not found", name)
+	}
+	entry := m.byID[id]
+	stdoutPath := entry.stdoutPath
+	stderrPath := entry.stderrPath
+	m.mu.Unlock()
+
+	stdout, err := os.ReadFile(stdoutPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read stdout: %w", err)
+	}
+	stderr, err := os.ReadFile(stderrPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read stderr: %w", err)
+	}
+	return stdout, stderr, nil
 }

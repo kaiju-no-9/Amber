@@ -1,0 +1,10 @@
+apiVersion: brain.dev/v1alpha1
+kind: Workload
+metadata:
+  name: log-test
+spec:
+  runtime: process
+  command: ["sh", "-c", "echo hello from logs; sleep 60"]
+  workingDir: .
+  env:
+    APP_ENV: "development"

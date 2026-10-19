@@ -126,3 +126,43 @@ func StopWorkload(ctx context.Context, socketPath, name string) error {
 	}
 	return nil
 }
+
+func GetWorkloadLogs(ctx context.Context, socketPath, name string) (api.WorkloadLogsResponse, error) {
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
+		},
+	}
+	defer transport.CloseIdleConnections()
+
+	httpClient := &http.Client{
+		Transport: transport,
+		Timeout:   5 * time.Second,
+	}
+
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		fmt.Sprintf("http://brain/v1/workloads/%s/logs", name),
+		nil,
+	)
+	if err != nil {
+		return api.WorkloadLogsResponse{}, fmt.Errorf("create logs request: %w", err)
+	}
+
+	response, err := httpClient.Do(request)
+	if err != nil {
+		return api.WorkloadLogsResponse{}, fmt.Errorf("contact daemon: %w", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return api.WorkloadLogsResponse{}, fmt.Errorf("daemon logs request returned %s", response.Status)
+	}
+
+	var logs api.WorkloadLogsResponse
+	if err := json.NewDecoder(response.Body).Decode(&logs); err != nil {
+		return api.WorkloadLogsResponse{}, fmt.Errorf("decode workload logs: %w", err)
+	}
+	return logs, nil
+}

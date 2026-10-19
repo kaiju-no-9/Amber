@@ -49,6 +49,20 @@ func execute(args []string) error {
 		fmt.Printf("stop requested for workload %q\n", args[1])
 		return nil
 	}
+	if len(args) == 2 && args[0] == "logs" {
+		logs, err := client.GetWorkloadLogs(
+			context.Background(),
+			"./brain.sock",
+			args[1],
+		)
+		if err != nil {
+			return err
+		}
+		fmt.Print(logs.Stdout)
+		fmt.Fprint(os.Stderr, logs.Stderr)
+		return nil
+	}
+
 	if len(args) == 2 && args[0] == "get" {
 		workload, err := client.GetWorkload(context.Background(), "./brain.sock", args[1])
 		if err != nil {
