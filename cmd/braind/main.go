@@ -107,6 +107,20 @@ func run() error {
 		})
 	})
 
+	mux.HandleFunc("DELETE /v1/workloads/{name}", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		if _, found := mgr.Get(name); !found {
+			http.NotFound(w, r)
+			return
+		}
+		err := mgr.Remove(name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
 	mux.HandleFunc("/v1/workloads/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

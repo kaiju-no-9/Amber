@@ -72,6 +72,13 @@ func execute(args []string) error {
 			workload.ID, workload.Name, workload.Status)
 		return nil
 	}
+	if len(args) == 2 && args[0] == "rm" {
+		if err := client.RemoveWorkload(context.Background(), "./brain.sock", args[1]); err != nil {
+			return err
+		}
+		fmt.Printf("workload %q removed\n", args[1])
+		return nil
+	}
 
 	if len(args) != 2 {
 		return fmt.Errorf("usage: brain <health|validate|run> [FILE]")

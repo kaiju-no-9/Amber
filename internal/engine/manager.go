@@ -215,6 +215,28 @@ func (m *Manager) Stop(name string) error {
 	return nil
 }
 
+func (m *Manager) Remove(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	id, exist := m.byName[name]
+	if !exist {
+		return fmt.Errorf("workload %q not found", name)
+	}
+	entry := m.byID[id]
+	if entry.workload.State == StateRunning || entry.workload.State == StateStarting {
+		return fmt.Errorf("workload %q is still running", name)
+	}
+	if entry.stdoutPath != "" {
+		logDir := filepath.Dir(entry.stdoutPath)
+		if err := os.RemoveAll(logDir); err != nil {
+			return fmt.Errorf("remove workload logs %w", err)
+		}
+	}
+	delete(m.byID, id)
+	delete(m.byName, name)
+	return nil
+}
+
 func (m *Manager) Logs(name string) ([]byte, []byte, error) {
 	m.mu.Lock()
 
