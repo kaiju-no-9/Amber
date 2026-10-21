@@ -26,7 +26,14 @@ func main() {
 }
 
 func run() error {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return fmt.Errorf("get user cache directory: %w", err)
+	}
+	defaultStatePath := filepath.Join(cacheDir, "brain", "state.json")
+	statePath := flag.String("state", defaultStatePath, "Path to the workload state file")
 	socketPath := flag.String("socket", "./brain.sock", "Unix socket path")
+
 	flag.Parse()
 
 	if err := os.MkdirAll(filepath.Dir(*socketPath), 0700); err != nil {
@@ -44,7 +51,10 @@ func run() error {
 		return fmt.Errorf("restrict socket permissions: %w", err)
 	}
 
-	mgr := engine.NewManager()
+	mgr, err := engine.NewManager(*statePath)
+	if err != nil {
+		return fmt.Errorf("new manager: %w", err)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
@@ -113,12 +123,10 @@ func run() error {
 			http.NotFound(w, r)
 			return
 		}
-		err := mgr.Remove(name)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusConflict)
+		if err := mgr.Remove(name); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		w.WriteHeader(http.StatusNoContent)
 	})
 
 	mux.HandleFunc("/v1/workloads/", func(w http.ResponseWriter, r *http.Request) {

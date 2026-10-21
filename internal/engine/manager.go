@@ -5,6 +5,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+
+	//"internal/runtime/exithook"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,16 +29,55 @@ type managedWorkload struct {
 }
 
 type Manager struct {
-	mu     sync.Mutex
-	byID   map[string]*managedWorkload
-	byName map[string]string
+	mu        sync.Mutex
+	byID      map[string]*managedWorkload
+	byName    map[string]string
+	statePath string
 }
 
-func NewManager() *Manager {
-	return &Manager{
-		byID:   make(map[string]*managedWorkload),
-		byName: make(map[string]string),
+func NewManager(statePath string) (*Manager, error) {
+	m := &Manager{
+		byID:      make(map[string]*managedWorkload),
+		byName:    make(map[string]string),
+		statePath: statePath,
 	}
+
+	state, err := readPersistedState(statePath)
+	if err != nil {
+		return nil, err
+	}
+	if state.Version != 1 {
+		return nil, fmt.Errorf("unsupported state file version %d", state.Version)
+	}
+
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return nil, fmt.Errorf("find cache directory: %w", err)
+	}
+
+	for _, saved := range state.Workloads {
+		workload := saved.Workload
+
+		// The manager can’t reconnect to a process after restarting yet.
+		if workload.State == StateRunning || workload.State == StateStarting {
+			workload.State = StateFailed
+			workload.FailureReason = "daemon restarted; process recovery is not implemented"
+			now := time.Now()
+			workload.FinishedAt = &now
+		}
+
+		logDir := filepath.Join(cacheDir, "brain", "logs", workload.ID)
+		entry := &managedWorkload{
+			workload:   workload,
+			spec:       saved.Spec,
+			stdoutPath: filepath.Join(logDir, "stdout.log"),
+			stderrPath: filepath.Join(logDir, "stderr.log"),
+		}
+		m.byID[workload.ID] = entry
+		m.byName[workload.Name] = workload.ID
+	}
+
+	return m, nil
 }
 
 func (m *Manager) Start(spec Spec) (Workload, error) {
@@ -113,16 +155,28 @@ func (m *Manager) Start(spec Spec) (Workload, error) {
 	}
 	m.byID[id] = entry
 	m.byName[spec.Name] = id
+	if err := m.saveLocked(); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		delete(m.byID, id)
+		delete(m.byName, spec.Name)
+		return Workload{}, fmt.Errorf("save state: %w", err)
+	}
 
 	go m.wait(id, cmd)
 	return workload, nil
 }
 
 func (m *Manager) wait(id string, cmd *exec.Cmd) {
-	err := cmd.Wait()
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	defer func() {
+		if saveErr := m.saveLocked(); saveErr != nil {
+			log.Printf("save workload state after process exit (id %s): %v", id, saveErr)
+		}
+	}()
+
+	err := cmd.Wait()
 
 	entry, exists := m.byID[id]
 	if !exists {
@@ -183,8 +237,6 @@ func (m *Manager) List() []Workload {
 	return workloads
 }
 
-//  for stopping
-
 func (m *Manager) Stop(name string) error {
 	m.mu.Lock()
 
@@ -218,22 +270,37 @@ func (m *Manager) Stop(name string) error {
 func (m *Manager) Remove(name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	id, exist := m.byName[name]
-	if !exist {
+
+	id, exists := m.byName[name]
+	if !exists {
 		return fmt.Errorf("workload %q not found", name)
 	}
+
 	entry := m.byID[id]
 	if entry.workload.State == StateRunning || entry.workload.State == StateStarting {
 		return fmt.Errorf("workload %q is still running", name)
 	}
+
+	logDir := ""
 	if entry.stdoutPath != "" {
-		logDir := filepath.Dir(entry.stdoutPath)
-		if err := os.RemoveAll(logDir); err != nil {
-			return fmt.Errorf("remove workload logs %w", err)
-		}
+		logDir = filepath.Dir(entry.stdoutPath)
 	}
+
 	delete(m.byID, id)
 	delete(m.byName, name)
+
+	if err := m.saveLocked(); err != nil {
+		m.byID[id] = entry
+		m.byName[name] = id
+		return fmt.Errorf("save workload removal: %w", err)
+	}
+
+	if logDir != "" {
+		if err := os.RemoveAll(logDir); err != nil {
+			return fmt.Errorf("workload was removed, but its logs could not be deleted: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -259,4 +326,18 @@ func (m *Manager) Logs(name string) ([]byte, []byte, error) {
 		return nil, nil, fmt.Errorf("read stderr: %w", err)
 	}
 	return stdout, stderr, nil
+}
+
+func (m *Manager) saveLocked() error {
+	state := persistedState{
+		Version: 1,
+	}
+
+	for _, entry := range m.byID {
+		state.Workloads = append(state.Workloads, persistedWorkload{
+			Workload: entry.workload,
+			Spec:     entry.spec,
+		})
+	}
+	return writePersistedState(m.statePath, state)
 }
