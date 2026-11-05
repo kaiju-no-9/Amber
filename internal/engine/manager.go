@@ -54,13 +54,14 @@ func NewManager(statePath string) (*Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("find cache directory: %w", err)
 	}
-
+	stateChanged := false
 	for _, saved := range state.Workloads {
 		workload := saved.Workload
 
 		// The manager can’t reconnect to a process after restarting yet.
 		if workload.State == StateRunning || workload.State == StateStarting {
 			workload.State = StateFailed
+			stateChanged = true
 			workload.FailureReason = "daemon restarted; process recovery is not implemented"
 			now := time.Now()
 			workload.FinishedAt = &now
@@ -75,6 +76,11 @@ func NewManager(statePath string) (*Manager, error) {
 		}
 		m.byID[workload.ID] = entry
 		m.byName[workload.Name] = workload.ID
+	}
+	if stateChanged {
+		if err := m.saveLocked(); err != nil {
+			return nil, fmt.Errorf("save recovered state: %w", err)
+		}
 	}
 
 	return m, nil
