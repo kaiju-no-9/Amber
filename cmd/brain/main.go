@@ -7,6 +7,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"strings"
+	"time"
 )
 
 func main() {
@@ -49,6 +52,9 @@ func execute(args []string) error {
 		fmt.Printf("stop requested for workload %q\n", args[1])
 		return nil
 	}
+	if len(args) == 3 && args[0] == "logs" && args[1] == "-f" {
+		return followLogs(args[2])
+	}
 	if len(args) == 2 && args[0] == "logs" {
 		logs, err := client.GetWorkloadLogs(
 			context.Background(),
@@ -81,7 +87,7 @@ func execute(args []string) error {
 	}
 
 	if len(args) != 2 {
-		return fmt.Errorf("usage: brain <health|validate|run> [FILE]")
+		return fmt.Errorf("usage: brain <health|ps|validate|run|stop|logs [-f]|get|rm> [NAME|FILE]")
 	}
 
 	command, path := args[0], args[1]
@@ -115,4 +121,52 @@ func execute(args []string) error {
 	default:
 		return fmt.Errorf("unknown command %q; use health, validate, or run", command)
 	}
+}
+
+func followLogs(name string) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	previousStdout := ""
+	previousStderr := ""
+
+	for {
+		logs, err := client.GetWorkloadLogs(ctx, "./brain.sock", name)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+
+		_, _ = fmt.Print(logDelta(previousStdout, logs.Stdout))
+		_, _ = fmt.Fprint(os.Stderr, logDelta(previousStderr, logs.Stderr))
+		previousStdout = logs.Stdout
+		previousStderr = logs.Stderr
+
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+	}
+}
+
+func logDelta(previous, current string) string {
+	if strings.HasPrefix(current, previous) {
+		return current[len(previous):]
+	}
+
+	// The daemon keeps one 10 MiB rotated file followed by the active file.
+	const rotatedFileSize = 10 << 20
+	if len(current) > rotatedFileSize && len(current) >= rotatedFileSize &&
+		strings.HasSuffix(previous, current[:rotatedFileSize]) {
+		return current[rotatedFileSize:]
+	}
+	if len(current) < len(previous) {
+		return current
+	}
+	return current[len(previous):]
 }

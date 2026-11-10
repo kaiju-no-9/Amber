@@ -127,6 +127,7 @@ func run() error {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	mux.HandleFunc("/v1/workloads/", func(w http.ResponseWriter, r *http.Request) {
@@ -202,6 +203,9 @@ func run() error {
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf("shut down daemon: %w", err)
+		}
+		if err := mgr.Shutdown(); err != nil {
+			return fmt.Errorf("stop managed workloads: %w", err)
 		}
 		err := <-serverErr
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {

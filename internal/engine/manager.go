@@ -24,8 +24,11 @@ type managedWorkload struct {
 	spec          Spec
 	command       *exec.Cmd
 	stopRequested bool
+	done          chan struct{}
 	stdoutPath    string
 	stderrPath    string
+	stdoutLog     *rotatingLogWriter
+	stderrLog     *rotatingLogWriter
 }
 
 type Manager struct {
@@ -112,22 +115,28 @@ func (m *Manager) Start(spec Spec) (Workload, error) {
 		return Workload{}, fmt.Errorf("create log dir: %w", err)
 	}
 	stdoutPath := filepath.Join(logDir, "stdout.log")
-	stdoutFile, err := os.OpenFile(stdoutPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	stdoutLog, err := openRotatingLogWriter(stdoutPath)
 	if err != nil {
 		return Workload{}, fmt.Errorf("create stdout log: %w", err)
 	}
-	defer stdoutFile.Close()
 	stderrPath := filepath.Join(logDir, "stderr.log")
-	stderrFile, err := os.OpenFile(stderrPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	stderrLog, err := openRotatingLogWriter(stderrPath)
 	if err != nil {
+		_ = stdoutLog.Close()
 		return Workload{}, fmt.Errorf("create stderr log: %w", err)
 	}
-	defer stderrFile.Close()
+	closeLogs := true
+	defer func() {
+		if closeLogs {
+			_ = stdoutLog.Close()
+			_ = stderrLog.Close()
+		}
+	}()
 	//...................................
 	cmd := exec.Command(spec.Command[0], spec.Command[1:]...)
 	cmd.Dir = spec.WorkingDir
-	cmd.Stdout = stdoutFile
-	cmd.Stderr = stderrFile
+	cmd.Stdout = stdoutLog
+	cmd.Stderr = stderrLog
 	cmd.Stdin = os.Stdin
 	cmd.Env = os.Environ()
 	for key, value := range spec.Env {
@@ -156,8 +165,11 @@ func (m *Manager) Start(spec Spec) (Workload, error) {
 		workload:   workload,
 		spec:       spec,
 		command:    cmd,
+		done:       make(chan struct{}),
 		stdoutPath: stdoutPath,
 		stderrPath: stderrPath,
+		stdoutLog:  stdoutLog,
+		stderrLog:  stderrLog,
 	}
 	m.byID[id] = entry
 	m.byName[spec.Name] = id
@@ -169,25 +181,34 @@ func (m *Manager) Start(spec Spec) (Workload, error) {
 		return Workload{}, fmt.Errorf("save state: %w", err)
 	}
 
+	closeLogs = false
 	go m.wait(id, cmd)
 	return workload, nil
 }
 
 func (m *Manager) wait(id string, cmd *exec.Cmd) {
+	err := cmd.Wait()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	defer func() {
-		if saveErr := m.saveLocked(); saveErr != nil {
-			log.Printf("save workload state after process exit (id %s): %v", id, saveErr)
-		}
-	}()
-
-	err := cmd.Wait()
 
 	entry, exists := m.byID[id]
 	if !exists {
 		return
 	}
+	defer func() {
+		if entry.stdoutLog != nil {
+			_ = entry.stdoutLog.Close()
+		}
+		if entry.stderrLog != nil {
+			_ = entry.stderrLog.Close()
+		}
+		if saveErr := m.saveLocked(); saveErr != nil {
+			log.Printf("save workload state after process exit (id %s): %v", id, saveErr)
+		}
+		if entry.done != nil {
+			close(entry.done)
+		}
+	}()
 
 	now := time.Now()
 	entry.workload.FinishedAt = &now
@@ -263,14 +284,52 @@ func (m *Manager) Stop(name string) error {
 		return fmt.Errorf("workload %q has no running process", name)
 	}
 
-	if err := entry.command.Process.Signal(os.Interrupt); err != nil {
+	entry.stopRequested = true
+	process := entry.command.Process
+	done := entry.done
+	if err := process.Signal(os.Interrupt); err != nil {
+		entry.stopRequested = false
 		m.mu.Unlock()
 		return fmt.Errorf("stop workload %q: %w", name, err)
 	}
-
-	entry.stopRequested = true
 	m.mu.Unlock()
-	return nil
+
+	if done == nil {
+		return nil
+	}
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return nil
+	case <-timer.C:
+		if err := process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return fmt.Errorf("force stop workload %q: %w", name, err)
+		}
+		<-done
+		return nil
+	}
+}
+
+// Shutdown stops managed processes before the daemon exits so they are not left
+// running without a manager that can inspect or stop them.
+func (m *Manager) Shutdown() error {
+	m.mu.Lock()
+	names := make([]string, 0, len(m.byName))
+	for name, id := range m.byName {
+		if m.byID[id].workload.State == StateRunning {
+			names = append(names, name)
+		}
+	}
+	m.mu.Unlock()
+
+	var shutdownErrors []error
+	for _, name := range names {
+		if err := m.Stop(name); err != nil {
+			shutdownErrors = append(shutdownErrors, err)
+		}
+	}
+	return errors.Join(shutdownErrors...)
 }
 
 func (m *Manager) Remove(name string) error {
@@ -323,15 +382,27 @@ func (m *Manager) Logs(name string) ([]byte, []byte, error) {
 	stderrPath := entry.stderrPath
 	m.mu.Unlock()
 
-	stdout, err := os.ReadFile(stdoutPath)
+	stdout, err := readRotatedLog(stdoutPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read stdout: %w", err)
 	}
-	stderr, err := os.ReadFile(stderrPath)
+	stderr, err := readRotatedLog(stderrPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read stderr: %w", err)
 	}
 	return stdout, stderr, nil
+}
+
+func readRotatedLog(path string) ([]byte, error) {
+	previous, previousErr := os.ReadFile(path + ".1")
+	if previousErr != nil && !os.IsNotExist(previousErr) {
+		return nil, previousErr
+	}
+	current, currentErr := os.ReadFile(path)
+	if currentErr != nil && !os.IsNotExist(currentErr) {
+		return nil, currentErr
+	}
+	return append(previous, current...), nil
 }
 
 func (m *Manager) saveLocked() error {
