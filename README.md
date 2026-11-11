@@ -133,4 +133,4 @@ Networking + mounts + Linux integration hardening     → planned
 The container milestones require Linux development and verification. Until then, Brain is a workload control-plane prototype, not a Docker replacement.
 
 
-<p align="center"><samp>Go · YAML · Unix sockets · Linux / OCI on the roadmap</samp></p>
+<p align="center"><samp>Go · YAML · Unix sockets · Linux </samp></p>
