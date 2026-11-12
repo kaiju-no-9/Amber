@@ -2,4 +2,7 @@ module brain
 
 go 1.27.0
 
-require gopkg.in/yaml.v3 v3.0.1 // indirect
+require (
+	github.com/opencontainers/runtime-spec v1.3.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
+)
