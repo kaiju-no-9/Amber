@@ -98,7 +98,7 @@ func execute(args []string) error {
 
 	switch command {
 	case "validate":
-		fmt.Printf("workload %q is valid (runtime: process)\n", workload.Metadata.Name)
+		fmt.Printf("workload %q is valid (runtime: %s)\n", workload.Metadata.Name, workload.Spec.Runtime)
 		return nil
 	case "run":
 		created, err := client.CreateWorkload(
@@ -110,6 +110,7 @@ func execute(args []string) error {
 				Command:    workload.Spec.Command,
 				WorkingDir: workload.Spec.WorkingDir,
 				Env:        workload.Spec.Env,
+				RootFS:     workload.Spec.RootFS,
 			},
 		)
 		if err != nil {

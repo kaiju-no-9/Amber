@@ -19,6 +19,7 @@ type Spec struct {
 	Command    []string
 	WorkingDir string
 	Env        map[string]string
+	RootFS     string
 }
 
 type Workload struct {

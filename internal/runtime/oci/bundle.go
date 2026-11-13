@@ -4,16 +4,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
-	//"strings"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
-func WriteBundle(bundleDir string, command []string, env map[string]string) error {
+func WriteBundle(bundleDir, rootfsDir, workingDir string, command []string, env map[string]string) error {
 	if len(command) == 0 || command[0] == "" {
 		return fmt.Errorf("container command is required")
+	}
+	if workingDir == "" {
+		workingDir = "/"
+	}
+	if !path.IsAbs(workingDir) {
+		return fmt.Errorf("container working directory must be absolute")
 	}
 
 	bundlePath, err := filepath.Abs(bundleDir)
@@ -24,7 +30,10 @@ func WriteBundle(bundleDir string, command []string, env map[string]string) erro
 		return fmt.Errorf("create bundle directory: %w", err)
 	}
 
-	rootfsPath := filepath.Join(bundlePath, "rootfs")
+	rootfsPath, err := filepath.Abs(rootfsDir)
+	if err != nil {
+		return fmt.Errorf("resolve rootfs directory: %w", err)
+	}
 	rootfsInfo, err := os.Stat(rootfsPath)
 	if err != nil {
 		return fmt.Errorf("find rootfs directory: %w", err)
@@ -47,13 +56,14 @@ func WriteBundle(bundleDir string, command []string, env map[string]string) erro
 	config := specs.Spec{
 		Version: specs.Version,
 		Process: &specs.Process{
-			User: specs.User{UID: 0, GID: 0},
-			Args: append([]string(nil), command...),
-			Env:  envPairs,
-			Cwd:  "/",
+			User:            specs.User{UID: 0, GID: 0},
+			Args:            append([]string(nil), command...),
+			Env:             envPairs,
+			Cwd:             workingDir,
+			NoNewPrivileges: true,
 		},
 		Root: &specs.Root{
-			Path: "rootfs",
+			Path: rootfsPath,
 		},
 		Linux: &specs.Linux{
 			Namespaces: []specs.LinuxNamespace{

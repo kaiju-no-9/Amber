@@ -1,21 +1,27 @@
 package oci
 
 import (
+	"brain/internal/engine"
 	"context"
 	"encoding/json"
 	"fmt"
+	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
-
-	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
 type Runtime struct {
 	binary string
 	root   string
+}
+
+var _ engine.ContainerRuntime = (*Runtime)(nil)
+
+func (r *Runtime) WriteBundle(bundleDir, rootfsDir, workingDir string, command []string, env map[string]string) error {
+	return WriteBundle(bundleDir, rootfsDir, workingDir, command, env)
 }
 
 func NewRuntime(binaryPath, stateRoot string) (*Runtime, error) {
@@ -24,12 +30,13 @@ func NewRuntime(binaryPath, stateRoot string) (*Runtime, error) {
 	}
 
 	if binaryPath == "" {
-		var err error
-		binaryPath, err = exec.LookPath("runc")
-		if err != nil {
-			return nil, fmt.Errorf("find runc in PATH: %w", err)
-		}
+		binaryPath = "runc"
 	}
+	resolvedBinary, err := exec.LookPath(binaryPath)
+	if err != nil {
+		return nil, fmt.Errorf("find runc in PATH: %w", err)
+	}
+	binaryPath = resolvedBinary
 
 	if stateRoot == "" {
 		return nil, fmt.Errorf("runc state directory is required")
@@ -63,24 +70,30 @@ func (r *Runtime) Start(ctx context.Context, id string) error {
 	return r.run(ctx, "--root", r.root, "start", id)
 }
 
-func (r *Runtime) State(ctx context.Context, id string) (specs.State, error) {
+func (r *Runtime) State(ctx context.Context, id string) (engine.RuntimeState, error) {
 	if err := validateID(id); err != nil {
-		return specs.State{}, err
+		return engine.RuntimeState{}, err
 	}
 
 	output, err := r.output(ctx, "--root", r.root, "state", id)
 	if err != nil {
-		return specs.State{}, err
+		return engine.RuntimeState{}, err
 	}
 
 	var state specs.State
 	if err := json.Unmarshal(output, &state); err != nil {
-		return specs.State{}, fmt.Errorf("decode runc state: %w", err)
+		return engine.RuntimeState{}, fmt.Errorf("decode runc state: %w", err)
 	}
 	if state.ID != id {
-		return specs.State{}, fmt.Errorf("runc returned state for unexpected ID %q", state.ID)
+		return engine.RuntimeState{}, fmt.Errorf("runc returned state for unexpected ID %q", state.ID)
 	}
-	return state, nil
+
+	return engine.RuntimeState{
+		ID:     state.ID,
+		Status: string(state.Status),
+		PID:    state.Pid,
+		Bundle: state.Bundle,
+	}, nil
 }
 
 func (r *Runtime) Kill(ctx context.Context, id, signal string) error {

@@ -10,6 +10,7 @@ type CreateWorkloadRequest struct {
 	Command    []string          `json:"command"`
 	WorkingDir string            `json:"workingDir"`
 	Env        map[string]string `json:"env"`
+	RootFS     string            `json:"rootfs,omitempty"`
 }
 
 type WorkloadResponse struct {

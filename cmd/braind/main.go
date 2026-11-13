@@ -3,6 +3,7 @@ package main
 import (
 	"brain/internal/api"
 	"brain/internal/engine"
+	"brain/internal/runtime/oci"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	platform "runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -33,6 +35,8 @@ func run() error {
 	defaultStatePath := filepath.Join(cacheDir, "brain", "state.json")
 	statePath := flag.String("state", defaultStatePath, "Path to the workload state file")
 	socketPath := flag.String("socket", "./brain.sock", "Unix socket path")
+	runcPath := flag.String("runc", "", "Path to the runc executable (Linux only)")
+	runcRoot := flag.String("runc-root", "", "runc state directory on tmpfs (Linux only)")
 
 	flag.Parse()
 
@@ -54,6 +58,27 @@ func run() error {
 	mgr, err := engine.NewManager(*statePath)
 	if err != nil {
 		return fmt.Errorf("new manager: %w", err)
+	}
+	if platform.GOOS == "linux" {
+		runcStateRoot := *runcRoot
+		if runcStateRoot == "" {
+			if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
+				runcStateRoot = filepath.Join(runtimeDir, "brain", "runc")
+			}
+		}
+		if runcStateRoot == "" {
+			log.Printf("OCI runtime unavailable: set XDG_RUNTIME_DIR or pass -runc-root")
+		} else {
+			containerRuntime, runtimeErr := oci.NewRuntime(*runcPath, runcStateRoot)
+			if runtimeErr != nil {
+				log.Printf("OCI runtime unavailable: %v", runtimeErr)
+			} else {
+				bundleRoot := filepath.Join(cacheDir, "brain", "bundles")
+				if err := mgr.ConfigureContainerRuntime(containerRuntime, bundleRoot); err != nil {
+					log.Printf("OCI runtime unavailable: %v", err)
+				}
+			}
+		}
 	}
 
 	mux := http.NewServeMux()
@@ -98,6 +123,7 @@ func run() error {
 			Command:    req.Command,
 			WorkingDir: req.WorkingDir,
 			Env:        req.Env,
+			RootFS:     req.RootFS,
 		})
 		if err != nil {
 			if errors.Is(err, engine.ErrNameConflict) {

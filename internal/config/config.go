@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -36,6 +37,7 @@ type Spec struct {
 	Command    []string          `yaml:"command"`
 	WorkingDir string            `yaml:"workingDir"`
 	Env        map[string]string `yaml:"env"`
+	RootFS     string            `yaml:"rootfs"`
 }
 
 func Load(path string) (Workload, error) {
@@ -59,7 +61,6 @@ func Load(path string) (Workload, error) {
 		}
 		return Workload{}, fmt.Errorf("decode trailing YAML: %w", err)
 	}
-
 	if err := workload.Validate(); err != nil {
 		return Workload{}, err
 	}
@@ -68,11 +69,30 @@ func Load(path string) (Workload, error) {
 	if err != nil {
 		return Workload{}, fmt.Errorf("resolve workload file directory: %w", err)
 	}
-	if workload.Spec.WorkingDir == "" {
-		workload.Spec.WorkingDir = "."
-	}
-	if !filepath.IsAbs(workload.Spec.WorkingDir) {
-		workload.Spec.WorkingDir = filepath.Join(base, workload.Spec.WorkingDir)
+	if workload.Spec.Runtime == "container" {
+		if workload.Spec.WorkingDir == "" {
+			workload.Spec.WorkingDir = "/"
+		}
+		if !pathpkg.IsAbs(workload.Spec.WorkingDir) {
+			return Workload{}, errors.New("spec.workingDir must be an absolute path inside the container")
+		}
+		if workload.Spec.RootFS != "" && !filepath.IsAbs(workload.Spec.RootFS) {
+			workload.Spec.RootFS = filepath.Join(base, workload.Spec.RootFS)
+		}
+		rootfsInfo, err := os.Stat(workload.Spec.RootFS)
+		if err != nil {
+			return Workload{}, fmt.Errorf("inspect spec.rootfs: %w", err)
+		}
+		if !rootfsInfo.IsDir() {
+			return Workload{}, fmt.Errorf("spec.rootfs %q is not a directory", workload.Spec.RootFS)
+		}
+	} else {
+		if workload.Spec.WorkingDir == "" {
+			workload.Spec.WorkingDir = "."
+		}
+		if !filepath.IsAbs(workload.Spec.WorkingDir) {
+			workload.Spec.WorkingDir = filepath.Join(base, workload.Spec.WorkingDir)
+		}
 	}
 
 	return workload, nil
@@ -90,8 +110,17 @@ func (w Workload) Validate() error {
 	if !workloadName.MatchString(w.Metadata.Name) {
 		problems = append(problems, "metadata.name must be 1-63 lowercase letters, digits, or internal hyphens")
 	}
-	if w.Spec.Runtime != "process" {
-		problems = append(problems, "spec.runtime must be process in this version")
+	switch w.Spec.Runtime {
+	case "process":
+		if w.Spec.RootFS != "" {
+			problems = append(problems, "spec.rootfs is only valid when spec.runtime is container")
+		}
+	case "container":
+		if w.Spec.RootFS == "" {
+			problems = append(problems, "spec.rootfs is required when spec.runtime is container")
+		}
+	default:
+		problems = append(problems, "spec.runtime must be process or container")
 	}
 	if len(w.Spec.Command) == 0 || w.Spec.Command[0] == "" {
 		problems = append(problems, "spec.command must contain a program")
