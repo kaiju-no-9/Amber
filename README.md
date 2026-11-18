@@ -24,7 +24,7 @@ Define a workload. Send it to the local daemon. Follow its lifecycle.
 
 Brain is a Go project for understanding the pieces behind a container engine: a CLI, a local control API, workload lifecycle management, persistent state, logs, and a runtime adapter boundary.
 
-Today, Brain runs **ordinary host processes** through braind. The OCI container backend is the destination; it is not implemented yet.
+Today, Brain runs **ordinary host processes** through braind and has an OCI runtime proof of concept that uses `runc` on Linux. Container execution has not yet been accepted on Linux and must not be treated as a production security boundary.
 
 <p align="center"><samp>⚠ process mode is not a container or a security boundary. Run only workloads you trust.</samp></p>
 
@@ -46,7 +46,7 @@ Today, Brain runs **ordinary host processes** through braind. The OCI container 
 
 <p align="center"><samp>CURRENT: CLI → daemon → process &nbsp; · &nbsp; PLANNED: registry, OCI runtime, networking, volumes</samp></p>
 
-For a process workload, the CLI validates YAML and calls the daemon over an owner-only Unix socket. The manager starts the host process, records lifecycle state, and captures its logs. The planned container path resolves an OCI image, prepares a root filesystem and bundle, then delegates container setup to an OCI runtime on Linux.
+For a process workload, the CLI validates YAML and calls the daemon over an owner-only Unix socket. The manager starts the host process, records lifecycle state, and captures its logs. The OCI proof of concept can pull Linux images into a local cache, prepare a root filesystem and bundle, then delegate container setup to an OCI runtime on Linux.
 
 ## <samp>› technology</samp>
 
@@ -107,6 +107,15 @@ spec:
 
 Commands are argument arrays and run directly; Brain does not invoke a shell implicitly. Set an explicit shell command when shell behavior is needed.
 
+For the Linux OCI proof of concept, first pull an image into Brain's per-user cache:
+
+~~~bash
+brain images pull busybox:latest
+brain images list
+~~~
+
+Then use `image: busybox:latest` instead of `rootfs:` in a `runtime: container` workload and run it on Linux with `runc` available. Image pulls select the host architecture's Linux image. The pull is explicit; `brain run` uses the cached image and does not contact a registry.
+
 ## <samp>› commands</samp>
 
 | Command | Action |
@@ -120,17 +129,20 @@ Commands are argument arrays and run directly; Brain does not invoke a shell imp
 | `brain logs -f NAME` | Follow output (one-second polling) |
 | `brain stop NAME` | Interrupt; force-kill after five seconds if needed |
 | `brain rm NAME` | Remove a stopped workload and its logs |
+| `brain images pull IMAGE` | Resolve and cache an OCI image and unpack its rootfs |
+| `brain images list` | List locally cached image references |
 
 ## <samp>› build path</samp>
 
 ~~~text
 YAML + CLI + local API + process lifecycle + logs      ✓ current
-OCI images + digest verification + root filesystem    → planned
-OCI bundle + Linux runtime + namespaces / cgroups     → planned
+OCI image pull + digest verification + root filesystem → implemented; Linux acceptance pending
+OCI bundle + Linux runtime                            → proof of concept; Linux acceptance pending
+Mounts / resources / networking / security hardening → planned
 Networking + mounts + Linux integration hardening     → planned
 ~~~
 
-The container milestones require Linux development and verification. Until then, Brain is a workload control-plane prototype, not a Docker replacement.
+Container execution, namespaces, cgroups, and networking require Linux verification. Brain is a learning project and not a production container engine or Docker replacement.
 
 
-<p align="center"><samp>Go · YAML · Unix sockets · Linux / OCI on the roadmap</samp></p>
+<p align="center"><samp>Go · YAML · Unix sockets · OCI proof of concept</samp></p>

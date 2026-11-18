@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 
+	"brain/internal/images"
 	"gopkg.in/yaml.v3"
 )
 
@@ -38,6 +39,7 @@ type Spec struct {
 	WorkingDir string            `yaml:"workingDir"`
 	Env        map[string]string `yaml:"env"`
 	RootFS     string            `yaml:"rootfs"`
+	Image      string            `yaml:"image"`
 }
 
 func Load(path string) (Workload, error) {
@@ -79,12 +81,14 @@ func Load(path string) (Workload, error) {
 		if workload.Spec.RootFS != "" && !filepath.IsAbs(workload.Spec.RootFS) {
 			workload.Spec.RootFS = filepath.Join(base, workload.Spec.RootFS)
 		}
-		rootfsInfo, err := os.Stat(workload.Spec.RootFS)
-		if err != nil {
-			return Workload{}, fmt.Errorf("inspect spec.rootfs: %w", err)
-		}
-		if !rootfsInfo.IsDir() {
-			return Workload{}, fmt.Errorf("spec.rootfs %q is not a directory", workload.Spec.RootFS)
+		if workload.Spec.RootFS != "" {
+			rootfsInfo, err := os.Stat(workload.Spec.RootFS)
+			if err != nil {
+				return Workload{}, fmt.Errorf("inspect spec.rootfs: %w", err)
+			}
+			if !rootfsInfo.IsDir() {
+				return Workload{}, fmt.Errorf("spec.rootfs %q is not a directory", workload.Spec.RootFS)
+			}
 		}
 	} else {
 		if workload.Spec.WorkingDir == "" {
@@ -112,12 +116,17 @@ func (w Workload) Validate() error {
 	}
 	switch w.Spec.Runtime {
 	case "process":
-		if w.Spec.RootFS != "" {
-			problems = append(problems, "spec.rootfs is only valid when spec.runtime is container")
+		if w.Spec.RootFS != "" || w.Spec.Image != "" {
+			problems = append(problems, "spec.rootfs and spec.image are only valid when spec.runtime is container")
 		}
 	case "container":
-		if w.Spec.RootFS == "" {
-			problems = append(problems, "spec.rootfs is required when spec.runtime is container")
+		if (w.Spec.RootFS == "") == (w.Spec.Image == "") {
+			problems = append(problems, "set exactly one of spec.rootfs or spec.image when spec.runtime is container")
+		}
+		if w.Spec.Image != "" {
+			if _, err := images.ParseReference(w.Spec.Image); err != nil {
+				problems = append(problems, "spec.image is invalid: "+err.Error())
+			}
 		}
 	default:
 		problems = append(problems, "spec.runtime must be process or container")

@@ -4,7 +4,7 @@ This file records the current implementation state against `BRAIN_IMPLEMENTATION
 
 ## Current scope
 
-Brain supports ordinary host processes through a local daemon. Process mode does not provide container isolation, namespaces, or cgroup resource limits. A prepared-rootfs OCI path is now wired in code, but it is Linux-only and has not been run on Linux.
+Brain supports ordinary host processes through a local daemon. Process mode does not provide container isolation, namespaces, or cgroup resource limits. The OCI runtime and image pull paths are implemented as proofs of concept; container execution still needs acceptance on Linux.
 
 ## Milestone 4 — Recovery, reliability, and logs
 
@@ -56,18 +56,42 @@ spec:
 
 This milestone is **implemented but not accepted**. Builds pass on macOS, but OCI container execution, `runc` lifecycle behavior, and runtime recovery still need Linux acceptance checks. Container log capture is not implemented in this proof of concept.
 
+## Milestone 6 — OCI image management proof of concept
+
+The CLI now supports `brain images pull IMAGE` and `brain images list`. Pull resolves tags/digests for the host's Linux architecture, uses the default Docker/Podman credential keychain, caches compressed layers by SHA-256 digest, and reuses cached content. It verifies downloaded compressed layer digests and applies OCI whiteouts while unpacking. Archive traversal, absolute paths, unsafe symlink targets, and hardlinks to non-regular/out-of-root files are rejected.
+
+Container YAML can select either a prepared `rootfs` or an already-pulled `image`, but must set exactly one. `brain run` resolves `image` from the local cache and passes its rootfs to the daemon. An image pull does not happen implicitly during `run`.
+
+This milestone is **implemented but not accepted**. No automated or Linux acceptance tests have been run. Validate registry pulls, corrupt-layer rejection, whiteout behavior, interrupted pull cleanup, rootfs permissions, and execution through `runc` on Linux before relying on it. The extractor deliberately rejects device nodes and unsupported archive entry types; this may exclude some images.
+
+Example container YAML using an image:
+
+```yaml
+apiVersion: brain.dev/v1alpha1
+kind: Workload
+metadata:
+  name: container-hello
+spec:
+  runtime: container
+  image: busybox:latest
+  command: ["/bin/echo", "hello from OCI"]
+  workingDir: /
+  env: {}
+```
+
+Pull the image first with `brain images pull busybox:latest`. Container execution still requires Linux and `runc`.
+
 ## Remaining milestones
 
-Milestones 6–9 and optional 10 are not implemented yet:
+Milestones 7–9 and optional 10 are not implemented yet:
 
-1. OCI image resolution, download, digest verification, and safe layer extraction.
-2. Container root filesystem management, mounts, and full OCI workload configuration.
-3. Linux CPU/memory controls and networking.
-4. Security review, Linux integration coverage, packaging, and release hardening.
-5. Optional experimental custom runtime using Linux namespaces and cgroups.
+1. Container root filesystem management, mounts, and full OCI workload configuration.
+2. Linux CPU/memory controls and networking.
+3. Security review, Linux integration coverage, packaging, and release hardening.
+4. Optional experimental custom runtime using Linux namespaces and cgroups.
 
 OCI execution, namespaces, cgroups, and networking require a Linux development environment. This checkout is being developed on macOS (`darwin/arm64`), so those behaviors need verification inside a Linux VM or host. The process backend must continue to reject container-only settings rather than silently treating them as process settings.
 
 ## Local changes
 
-Recent Milestone 4 changes are local in the working tree. They have not been pushed to GitHub.
+Milestone 6 implementation changes are local in the working tree and have not been pushed to GitHub.

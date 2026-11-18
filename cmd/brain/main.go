@@ -4,11 +4,13 @@ import (
 	"brain/internal/api"
 	"brain/internal/client"
 	"brain/internal/config"
+	"brain/internal/images"
 	"context"
 	"fmt"
 	"os"
 	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -20,6 +22,9 @@ func main() {
 }
 
 func execute(args []string) error {
+	if len(args) > 0 && args[0] == "images" {
+		return imageCommand(args[1:])
+	}
 	if len(args) == 1 && args[0] == "health" {
 		health, err := client.Health(context.Background(), "./brain.sock")
 		if err != nil {
@@ -87,7 +92,7 @@ func execute(args []string) error {
 	}
 
 	if len(args) != 2 {
-		return fmt.Errorf("usage: brain <health|ps|validate|run|stop|logs [-f]|get|rm> [NAME|FILE]")
+		return fmt.Errorf("usage: brain <health|ps|validate|run|stop|logs [-f]|get|rm|images> [NAME|FILE]")
 	}
 
 	command, path := args[0], args[1]
@@ -95,12 +100,22 @@ func execute(args []string) error {
 	if err != nil {
 		return err
 	}
-
 	switch command {
 	case "validate":
 		fmt.Printf("workload %q is valid (runtime: %s)\n", workload.Metadata.Name, workload.Spec.Runtime)
 		return nil
 	case "run":
+		if workload.Spec.Runtime == "container" && workload.Spec.Image != "" {
+			store, err := images.DefaultStore()
+			if err != nil {
+				return err
+			}
+			record, err := images.ResolveLocal(store, workload.Spec.Image)
+			if err != nil {
+				return err
+			}
+			workload.Spec.RootFS = record.RootFS
+		}
 		created, err := client.CreateWorkload(
 			context.Background(),
 			"./brain.sock",
@@ -122,6 +137,45 @@ func execute(args []string) error {
 	default:
 		return fmt.Errorf("unknown command %q; use health, validate, or run", command)
 	}
+}
+
+func imageCommand(args []string) error {
+	if len(args) == 1 && (args[0] == "list" || args[0] == "ls") {
+		store, err := images.DefaultStore()
+		if err != nil {
+			return err
+		}
+		records, err := images.List(store)
+		if err != nil {
+			return fmt.Errorf("list cached images: %w", err)
+		}
+		if len(records) == 0 {
+			fmt.Println("no images")
+			return nil
+		}
+		fmt.Printf("%-40s %-72s %-16s %s\n", "REFERENCE", "DIGEST", "PLATFORM", "ROOTFS")
+		for _, record := range records {
+			fmt.Printf("%-40s %-72s %-16s %s\n", record.Reference, record.Digest, record.OS+"/"+record.Architecture, record.RootFS)
+		}
+		return nil
+	}
+	if len(args) == 2 && args[0] == "pull" {
+		store, err := images.DefaultStore()
+		if err != nil {
+			return err
+		}
+		parent, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		ctx, cancel := context.WithTimeout(parent, 30*time.Minute)
+		defer cancel()
+		record, err := images.Pull(ctx, store, args[1])
+		if err != nil {
+			return err
+		}
+		fmt.Printf("pulled %s (%s) for %s/%s\nrootfs: %s\n", record.Reference, record.Digest, record.OS, record.Architecture, record.RootFS)
+		return nil
+	}
+	return fmt.Errorf("usage: brain images <pull IMAGE|list>")
 }
 
 func followLogs(name string) error {

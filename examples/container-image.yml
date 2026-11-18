@@ -1,0 +1,10 @@
+apiVersion: brain.dev/v1alpha1
+kind: Workload
+metadata:
+  name: container-hello
+spec:
+  runtime: container
+  image: busybox:latest
+  command: ["/bin/echo", "hello from OCI"]
+  workingDir: /
+  env: {}
